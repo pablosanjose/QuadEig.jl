@@ -1,0 +1,13 @@
+name = "QuadEig"
+uuid = "c91c7b58-0d0b-4d20-b830-a38cac847d15"
+authors = ["Pablo San-Jose <lekand@gmail.com> and contributors"]
+version = "0.1.0"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+julia = "1"
+
+[targets]
+test = ["Test"]
