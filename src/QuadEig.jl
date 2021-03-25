@@ -83,18 +83,6 @@ function linearize(q::QuadPencilPQR{T}) where {T}
     return LinearizedV(A, B, V)
 end
 
-getQ(qr::Factorization) = qr.Q * Matrix(I, size(qr, 1), size(qr, 1))
-getQ(qr::SuiteSparse.SPQR.QRSparse) =  I(size(qr, 1))[:, qr.prow] * sparse(qr.Q * Matrix(I, size(qr, 1), size(qr, 1)))
-
-getQ´(qr::Factorization) = qr.Q' * Matrix(I, size(qr, 1), size(qr, 1))
-getQ´(qr::SuiteSparse.SPQR.QRSparse) = sparse((qr.Q * Matrix(I, size(qr, 1), size(qr, 1)))') * I(size(qr,1))[qr.prow,:]
-
-getRP´(qr::Factorization) = qr.R * qr.P'
-getRP´(qr::SuiteSparse.SPQR.QRSparse) = qr.R * I(size(qr, 2))[qr.pcol, :]
-
-getPR´(qr::Factorization) = qr.P * qr.R'
-getPR´(qr::SuiteSparse.SPQR.QRSparse) = I(size(qr, 2))[:, qr.pcol] * qr.R'
-
 Base.size(l::AbstractLinearizedPencil, n...) = size(l.A, n...)
 
 ### deflate ################################################################################
@@ -109,13 +97,100 @@ end
 deflate(A0, A1, A2; kw...) = deflate(linearize(quadpencilPQR(quadpencil(A0, A1, A2))); kw...)
 
 function deflate(l::LinearizedV{T}; atol = sqrt(eps(real(T)))) where {T}
-    rank0, rank2 = nonzero_rows(l, atol)
-    rank0 == rank2 || throw(ArgumentError("The case with inhomogeneous ranks not yet supported. Got $((rank0, rank2))"))
-    r = rank0
+    r0, r2 = nonzero_rows(l, atol)
     n = size(l, 1) ÷ 2
-    X = view(l.A, r+1:n, 1:(n+r)) # [X21 X22 X23]
-    ZX´ = fod_z´(X)
-    
+    s = n - r2
+    X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
+    ZX´ = fod_z´(X, 1+s:s+r0+r2)
+    A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
+    V = view(l.V, :, 1:n+r0) * ZX´
+    return LinearizedDeflated(A, B, V)
+end
+
+# get some columns of Z' in a full orthogonal decomposition of X
+fod_z´(X::SparseMatrixCSC, cols = :) = _fod_z´(sparse(X'), cols)
+fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}, cols = :) = _fod_z´(sparse(X'), cols)
+fod_z´(X, cols = :) = _fod_z´(X', cols)
+_fod_z´(X´, cols) = getQ(qr(X´), cols)
+
+function deflatedAB(lA::SparseMatrixCSC, lB, ZX´, r0, r2, s)
+    selected_rows = Isparse(size(lA, 1), [1:r2; 1+s+r2:s+r0+r2], :)
+    tmp = selected_rows * lA
+    A = view(tmp, :, 1:s+r0+r2) * ZX´
+    mul!(tmp, selected_rows, lB)
+    B = view(tmp, :, 1:s+r0+r2) * ZX´
+    return A, B
+end
+
+function deflatedAB(lA::AbstractMatrix{T}, lB, ZX´, r0, r2, s) where {T}
+    A = similar(lA, r0+r2, r0+r2)
+    mul!(view(A, 1:r2, :), view(lA, 1:r2, 1:s+r0+r2), ZX´)
+    mul!(view(A, 1+r2:r0+r2, :), view(lA, 1+s+r2:s+r0+r2, 1:s+r0+r2), ZX´)
+    B = similar(A)
+    mul!(view(B, 1:r2, :), view(lB, 1:r2, 1:s+r2), view(ZX´, 1:s+r2, :))
+    B[1+r2:r0+r2, :] .= ZX´[1+s+r2:s+r0+r2, :]
+    chop!(A)
+    chop!(B)
+    return A, B
+end
+
+### Tools ################################################################################
+
+getQ(qr::Factorization, cols = :) = qr.Q * Idense(size(qr, 1), cols)
+getQ(qr::SuiteSparse.SPQR.QRSparse, cols = :) =  Isparse(size(qr, 1), :, qr.prow) * sparse(qr.Q * Idense(size(qr, 1), cols))
+
+getQ´(qr::Factorization, cols = :) = qr.Q' * Idense(size(qr, 1), cols)
+getQ´(qr::SuiteSparse.SPQR.QRSparse, cols = :) = sparse((qr.Q * Idense(size(qr, 1), cols))') * Isparse(size(qr,1), qr.prow, :)
+
+getRP´(qr::Factorization) = qr.R * qr.P'
+getRP´(qr::SuiteSparse.SPQR.QRSparse) = qr.R * Isparse(size(qr, 2), qr.pcol, :)
+
+getPR´(qr::Factorization) = qr.P * qr.R'
+getPR´(qr::SuiteSparse.SPQR.QRSparse) = Isparse(size(qr, 2), :, qr.pcol) * qr.R'
+
+Idense(n, ::Colon) = Matrix(I, n, n)
+
+function Idense(n, cols)
+    m = zeros(Bool, n, length(cols))
+    for (j, col) in enumerate(cols)
+        m[col, j] = true
+    end
+    return m
+end
+
+Isparse(n, rows, cols) = _Isparse(n, inds(rows, n), inds(cols, n))
+
+inds(::Colon, n) = 1:n
+inds(is, n) = is
+
+function _Isparse(n, rows, cols)
+    rowval = Int[]
+    nzval = Bool[]
+    colptr = Vector{Int}(undef, length(cols) + 1)
+    colptr[1] = 1
+    for (j, col) in enumerate(cols)
+        push_rows!(rowval, nzval, rows, col)
+        colptr[j+1] = length(rowval) + 1
+    end
+    return SparseMatrixCSC(length(rows), length(cols), colptr, rowval, nzval)
+end
+
+function push_rows!(rowval, nzval, rows::AbstractUnitRange, col)
+    if col in rows
+        push!(rowval, 1 + rows[1 + col - first(rows)] - first(rows))
+        push!(nzval, true)
+    end
+    return nothing
+end
+
+function push_rows!(rowval, nzval, rows, col)
+    for (j, row) in enumerate(rows)
+        if row == col
+            push!(rowval, j)
+            push!(nzval, true)
+        end
+    end
+    return nothing
 end
 
 function nonzero_rows(l::LinearizedV{T}, atol = sqrt(eps(real(T)))) where {T}
@@ -138,10 +213,11 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
     return n
 end
 
-# Z' of the full orthogonal decomposition of X
-fod_z´(X::SparseMatrixCSC) = _fod_z´(sparse(X'))
-fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}) = _fod_z´(sparse(X'))
-fod_z´(X) = _fod_z´(X')
-_fod_z´(X´) = getQ(qr(X´))
+function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
+    for (i, a) in enumerate(A)
+        abs(a) < atol && (A[i] = zero(T))
+    end
+    return A
+end
 
 end # Module
