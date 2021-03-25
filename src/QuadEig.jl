@@ -2,9 +2,9 @@ module QuadEig
 
 using LinearAlgebra, SparseArrays, SuiteSparse
 
-### QuadPencil
+### QuadPencil #############################################################################
 # Encodes the quadratic pencil problem
-###
+############################################################################################
 struct QuadPencil{T<:Complex,M<:AbstractMatrix{T}}
     A0::M
     A1::M
@@ -27,9 +27,9 @@ unwrap_adjoint(A::AbstractMatrix{T}, ::Type{T}) where {T} = A
 
 Base.size(q::QuadPencil, n...) = size(q.A0, n...)
 
-### QuadPencilQR
+### QuadPencilQR ###########################################################################
 # pivoted QR-factorization
-###
+############################################################################################
 struct QuadPencilPQR{T,M,Q<:Factorization{T}}
     pencil::QuadPencil{T,M}
     qr0::Q
@@ -45,25 +45,33 @@ end
 pqr!(a::SparseMatrixCSC) = qr(a)
 pqr!(a) = qr!(a, Val(true))
 
-### LinearizedPencil
+### Linearized Pencils #####################################################################
 # Build second companion linearization, or Q*C2*V rotation thereof
-###
-struct LinearizedPencil{T,M<:AbstractMatrix{T}}
+############################################################################################
+abstract type AbstractLinearizedPencil{T,M} end
+
+struct LinearizedC2{T,M<:AbstractMatrix{T}} <: AbstractLinearizedPencil{T,M}
+    A::M
+    B::M
+end
+
+struct LinearizedV{T,M<:AbstractMatrix{T}}  <: AbstractLinearizedPencil{T,M}
     A::M
     B::M
     V::M
 end
 
-function linearizedpencil(p::QuadPencil{T,M}) where {T,M}
+linearize(A0, A1, A2) = linearize(quadpencil(A0, A1, A2))
+
+function linearize(p::QuadPencil{T,M}) where {T,M}
     n = size(p, 1)
     o, z = one(p.A1), zero(p.A1)
     A = [p.A1 -o; p.A0 z]
     B = [-p.A2 z; z -o]
-    V = M(I, 2n, 2n)
-    return LinearizedPencil(A, B, V)
+    return LinearizedC2(A, B)
 end
 
-function linearizedpencil(q::QuadPencilPQR{T}) where {T}
+function linearize(q::QuadPencilPQR{T}) where {T}
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
     Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
@@ -72,37 +80,45 @@ function linearizedpencil(q::QuadPencilPQR{T}) where {T}
     A = [Q2´*A0 -Q2´*Q0; RP0 z]
     B = [RP2 z; z o]
     B .= .- B
-    return LinearizedPencil(A, B, V)
+    return LinearizedV(A, B, V)
 end
 
-getQ(qr::QRPivoted) = qr.Q
-getQ(qr::SuiteSparse.SPQR.QRSparse) =  I(size(qr,1))[:, qr.prow] * sparse(Matrix(qr.Q))
+getQ(qr::Factorization) = qr.Q * Matrix(I, size(qr, 1), size(qr, 1))
+getQ(qr::SuiteSparse.SPQR.QRSparse) =  I(size(qr, 1))[:, qr.prow] * sparse(qr.Q * Matrix(I, size(qr, 1), size(qr, 1)))
 
-getQ´(qr::QRPivoted) = qr.Q'
-getQ´(qr::SuiteSparse.SPQR.QRSparse) = sparse(Matrix(qr.Q)') * I(size(qr,1))[qr.prow,:]
+getQ´(qr::Factorization) = qr.Q' * Matrix(I, size(qr, 1), size(qr, 1))
+getQ´(qr::SuiteSparse.SPQR.QRSparse) = sparse((qr.Q * Matrix(I, size(qr, 1), size(qr, 1)))') * I(size(qr,1))[qr.prow,:]
 
+getRP´(qr::Factorization) = qr.R * qr.P'
+getRP´(qr::SuiteSparse.SPQR.QRSparse) = qr.R * I(size(qr, 2))[qr.pcol, :]
 
-getRP´(qr::QRPivoted) = qr.R * qr.P'
-getRP´(qr::SuiteSparse.SPQR.QRSparse) = qr.R * I(size(qr,1))[qr.pcol, :]
+getPR´(qr::Factorization) = qr.P * qr.R'
+getPR´(qr::SuiteSparse.SPQR.QRSparse) = I(size(qr, 2))[:, qr.pcol] * qr.R'
 
-getPR´(qr::QRPivoted) = qr.P * qr.R'
-getPR´(qr::SuiteSparse.SPQR.QRSparse) = I(size(qr,1))[:, qr.pcol] * qr.R'
+Base.size(l::AbstractLinearizedPencil, n...) = size(l.A, n...)
 
-Base.size(l::LinearizedPencil, n...) = size(l.A, n...)
-
-### deflate
+### deflate ################################################################################
 # compute deflated pencil
-###
-function deflate(l::LinearizedPencil{T}, atol = sqrt(eps(real(T)))) where {T}
+############################################################################################
+struct LinearizedDeflated{T,M<:AbstractMatrix{T}}  <: AbstractLinearizedPencil{T,M}
+    A::M
+    B::M
+    V::M
+end
+
+deflate(A0, A1, A2; kw...) = deflate(linearize(quadpencilPQR(quadpencil(A0, A1, A2))); kw...)
+
+function deflate(l::LinearizedV{T}; atol = sqrt(eps(real(T)))) where {T}
     rank0, rank2 = nonzero_rows(l, atol)
-    rank0 == rank2 || throw(ArgumentError("The case with inhomogeneous ranks not yet supported"))
+    rank0 == rank2 || throw(ArgumentError("The case with inhomogeneous ranks not yet supported. Got $((rank0, rank2))"))
     r = rank0
     n = size(l, 1) ÷ 2
     X = view(l.A, r+1:n, 1:(n+r)) # [X21 X22 X23]
-    QX, ZX = qz(X)
+    ZX´ = fod_z´(X)
+    
 end
 
-function nonzero_rows(l::LinearizedPencil{T}, atol = sqrt(eps(real(T)))) where {T}
+function nonzero_rows(l::LinearizedV{T}, atol = sqrt(eps(real(T)))) where {T}
     n = size(l, 2) ÷ 2
     rank0, rank2 = nonzero_rows(view(l.A, n+1:2n, 1:n), atol), nonzero_rows(view(l.B, 1:n, 1:n), atol)
     return rank0, rank2
@@ -122,24 +138,10 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
     return n
 end
 
-qz(X::SubArray{<:Complex,2,<:SparseMatrixCSC}) = qz(sparse(X))
+# Z' of the full orthogonal decomposition of X
+fod_z´(X::SparseMatrixCSC) = _fod_z´(sparse(X'))
+fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}) = _fod_z´(sparse(X'))
+fod_z´(X) = _fod_z´(X')
+_fod_z´(X´) = getQ(qr(X´))
 
-function qz(X::SparseMatrixCSC)
-    qrX = qr(X)
-    PR´ = getPR´(qrX)
-    lq´ = qr(PR´)
-    Q = sparse(qrX)
-    Z = sparse(lq´.Q')
-    return Q, Z
-end
-
-function qz(X)
-    qrX = qr(X, Val(true))
-    RP = getRP´(qrX)
-    lqR = lq(RP)
-    Q = qrX.Q * Matrix(I, size(X, 1), size(X, 1))
-    Z = lqR.Z * Matrix(I, size(X, 2), size(X, 2))
-    return Q, Z
-end
-
-end
+end # Module
