@@ -2,6 +2,8 @@ module QuadEig
 
 using LinearAlgebra, SparseArrays, SuiteSparse
 
+export quadpencil, pqr, linearize, deflate
+
 ### QuadPencil #############################################################################
 # Encodes the quadratic pencil problem
 ############################################################################################
@@ -36,7 +38,7 @@ struct QuadPencilPQR{T,M,Q<:Factorization{T}}
     qr2::Q
 end
 
-function quadpencilPQR(pencil::QuadPencil{T}) where {T}
+function pqr(pencil::QuadPencil{T}) where {T}
     qr0 = pqr!(copy(pencil.A0))
     qr2 = pqr!(copy(pencil.A2))
     return QuadPencilPQR(pencil, qr0, qr2)
@@ -46,7 +48,7 @@ pqr!(a::SparseMatrixCSC) = qr(a)
 pqr!(a) = qr!(a, Val(true))
 
 ### Linearized Pencils #####################################################################
-# Build second companion linearization, or Q*C2*V rotation thereof
+# Build second companion linearization, or its Q*C2*V rotation
 ############################################################################################
 abstract type AbstractLinearizedPencil{T,M} end
 
@@ -88,13 +90,8 @@ Base.size(l::AbstractLinearizedPencil, n...) = size(l.A, n...)
 ### deflate ################################################################################
 # compute deflated pencil
 ############################################################################################
-struct LinearizedDeflated{T,M<:AbstractMatrix{T}}  <: AbstractLinearizedPencil{T,M}
-    A::M
-    B::M
-    V::M
-end
 
-deflate(A0, A1, A2; kw...) = deflate(linearize(quadpencilPQR(quadpencil(A0, A1, A2))); kw...)
+deflate(A0, A1, A2; kw...) = deflate(linearize(pqr(quadpencil(A0, A1, A2))); kw...)
 
 function deflate(l::LinearizedV{T}; atol = sqrt(eps(real(T)))) where {T}
     r0, r2 = nonzero_rows(l, atol)
@@ -102,9 +99,10 @@ function deflate(l::LinearizedV{T}; atol = sqrt(eps(real(T)))) where {T}
     s = n - r2
     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
+    deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
-    return LinearizedDeflated(A, B, V)
+    return LinearizedV(A, B, V)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
@@ -116,9 +114,8 @@ _fod_z´(X´, cols) = getQ(qr(X´), cols)
 function deflatedAB(lA::SparseMatrixCSC, lB, ZX´, r0, r2, s)
     selected_rows = Isparse(size(lA, 1), [1:r2; 1+s+r2:s+r0+r2], :)
     tmp = selected_rows * lA
-    A = view(tmp, :, 1:s+r0+r2) * ZX´
-    mul!(tmp, selected_rows, lB)
-    B = view(tmp, :, 1:s+r0+r2) * ZX´
+    A = view(selected_rows * lA, :, 1:s+r0+r2) * ZX´
+    B = view(selected_rows * lB, :, 1:s+r0+r2) * ZX´
     return A, B
 end
 
