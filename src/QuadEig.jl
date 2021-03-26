@@ -50,7 +50,8 @@ pqr!(a) = qr!(a, Val(true))
 ### Linearized Pencils #####################################################################
 # Build second companion linearization, or its Q*C2*V rotation
 ############################################################################################
-struct Linearization{T,M<:AbstractMatrix{T}} 
+struct Linearization{T,M<:AbstractMatrix{T}}
+    # Q::M
     A::M
     B::M
     V::M
@@ -62,12 +63,18 @@ linearize(p::QuadPencil; qr = false) = qr ? linearize(pqr(p)) : linearizeC2(p)
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
-    Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
+    # Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
+    Q0, Q0´, Q2´ = getQ(q.qr0), getQ´(q.qr0), getQ´(q.qr2)
     RP0, RP2 = getRP´(q.qr0), getRP´(q.qr2)
-    A = [Q2´*A0 -Q2´*Q0; RP0 z]
+    V = [o z; z Q0]
+    Q = [Q2´ z; z Q0´]
+    A = [Q2´*A1 -Q2´*Q0; RP0 z]
     B = [RP2 z; z o]
     B .= .- B
-    V = [o z; z Q0]
+    # l = linearizeC2(q.pencil)
+    # A = Q * l.A * V
+    # B = Q * l.B * V
+    # return Linearization(Q, A, B, V)
     return Linearization(A, B, V)
 end
 
@@ -77,6 +84,8 @@ function linearizeC2(p::QuadPencil)
     A = [p.A1 -o; p.A0 z]
     B = [-p.A2 z; z -o]
     V = one(A)
+    Q = one(A)
+    # return Linearization(Q, A, B, V)
     return Linearization(A, B, V)
 end
 
@@ -113,6 +122,8 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
     deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
+    # Q = l.Q[[1:r2; n+1:n+r0], :]
+    # return Linearization(Q, A, B, V)
     return Linearization(A, B, V)
 end
 
@@ -130,7 +141,9 @@ end
 #                spzeros(n-r0,r2) spzeros(n-r0,s) spzeros(n-r0, r0) I(n-r0)]
 #     A = QXfull´[1:r0+r2, :] * l.A * ZXfull´[:,1:r0+r2]
 #     B = QXfull´[1:r0+r2, :] * l.B * ZXfull´[:,1:r0+r2]
-#     V = view(l.V, :, 1:n+r0) * ZX´
+#     V = l.V * ZXfull´
+#     # Q = QXfull´ * l.Q
+#     # return Linearization(Q, A, B, V)
 #     return Linearization(A, B, V)
 # end
 
@@ -140,17 +153,17 @@ fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}, cols = :) = _fod_z´(sparse(X'),
 fod_z´(X, cols = :) = _fod_z´(X', cols)
 _fod_z´(X´, cols) = getQ(qr(X´), cols)
 
-fod_qz´(X::SparseMatrixCSC) = _fod_qz´(sparse(X'))
-fod_qz´(X::SubArray{<:Any,2,<:SparseMatrixCSC}) = _fod_qz´(sparse(X'))
-fod_qz´(X) = _fod_qz´(X')
-function _fod_qz´(X´)
-    q = qr(X´)
-    Z´ = getQ(q)
-    RP´ = getRP´(q)
-    q´ = qr(sparse(RP´'))
-    Q´ = getQ´(q´)
-    return Q´, Z´
-end
+# fod_qz´(X::SparseMatrixCSC) = _fod_qz´(sparse(X'))
+# fod_qz´(X::SubArray{<:Any,2,<:SparseMatrixCSC}) = _fod_qz´(sparse(X'))
+# fod_qz´(X) = _fod_qz´(X')
+# function _fod_qz´(X´)
+#     q = qr(X´)
+#     Z´ = getQ(q)
+#     RP´ = getRP´(q)
+#     q´ = qr(sparse(RP´'))
+#     Q´ = getQ´(q´)
+#     return Q´, Z´
+# end
 
 # carry out quadeig deflation
 function deflatedAB(lA::SparseMatrixCSC, lB, ZX´, r0, r2, s)
