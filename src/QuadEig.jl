@@ -51,10 +51,10 @@ pqr!(a) = qr!(a, Val(true))
 # Build second companion linearization, or its Q*C2*V rotation
 ############################################################################################
 struct Linearization{T,M<:AbstractMatrix{T}}
-    # Q::M
     A::M
     B::M
     V::M
+    isqr::Bool
 end
 
 linearize(A0, A1, A2; kw...) = linearize(quadpencil(A0, A1, A2); kw...)
@@ -63,19 +63,13 @@ linearize(p::QuadPencil; qr = false) = qr ? linearize(pqr(p)) : linearizeC2(p)
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
-    # Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
-    Q0, Q0´, Q2´ = getQ(q.qr0), getQ´(q.qr0), getQ´(q.qr2)
+    Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
     RP0, RP2 = getRP´(q.qr0), getRP´(q.qr2)
     V = [o z; z Q0]
-    Q = [Q2´ z; z Q0´]
     A = [Q2´*A1 -Q2´*Q0; RP0 z]
     B = [RP2 z; z o]
     B .= .- B
-    # l = linearizeC2(q.pencil)
-    # A = Q * l.A * V
-    # B = Q * l.B * V
-    # return Linearization(Q, A, B, V)
-    return Linearization(A, B, V)
+    return Linearization(A, B, V, true)
 end
 
 function linearizeC2(p::QuadPencil)
@@ -84,18 +78,27 @@ function linearizeC2(p::QuadPencil)
     A = [p.A1 -o; p.A0 z]
     B = [-p.A2 z; z -o]
     V = one(A)
-    Q = one(A)
-    # return Linearization(Q, A, B, V)
-    return Linearization(A, B, V)
+    return Linearization(A, B, V, false)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
     print(io, summary(l), "\n",
 "  Matrix size    : $(size(l.A, 1)) × $(size(l.A, 2))
   Matrix type    : $M
-  QR-transformed : $(l.V != I)
+  QR-transformed : $(l.isqr)
   Deflated       : $(deflationstring(l))")
 end
+
+function quadpencil(l::Linearization{T,M}) where {T,M}
+    n = size(l, 1) ÷ 2
+    A0 = convert(M, view(l.A, n+1:2n, 1:n))
+    A1 = convert(M, view(l.A, 1:n, 1:n))
+    A2 = convert(M, view(l.B, 1:n, 1:n))
+    A2 .= .- A2
+    return quadpencil(A0, A1, A2)
+end
+
+pqr(l::Linearization) = pqr(quadpencil(l))
 
 Base.summary(l::Linearization{T}) where {T} =
     "Linearization{T}: second companion linearization of quadratic pencil"
@@ -114,6 +117,7 @@ deflate(A0, A1, A2; kw...) = deflate(quadpencil(A0, A1, A2); kw...)
 deflate(q::QuadPencil; kw...) = deflate(linearize(q; qr = true); kw...)
 
 function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
+    l = l.isqr ? l : linearize(pqr(l))
     r0, r2 = nonzero_rows(l, atol)
     n = size(l, 1) ÷ 2
     s = n - r2
@@ -122,30 +126,8 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
     deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
-    # Q = l.Q[[1:r2; n+1:n+r0], :]
-    # return Linearization(Q, A, B, V)
-    return Linearization(A, B, V)
+    return Linearization(A, B, V, false)
 end
-
-# function deflate_full(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
-#     r0, r2 = nonzero_rows(l, atol)
-#     n = size(l, 1) ÷ 2
-#     s = n - r2
-#     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
-#     QX´, ZX´ = fod_qz´(X)
-#     # ZXfull´ = [ZX´ spzeros(s+r2+r0, n-r0); spzeros(n-r0, s+r2+r0) I(n-r0)] * I(2n)[[1+s:s+r0+r2; 1:s; 1+n+r0:2n],:]
-#     ZXfull´ = [ZX´ spzeros(s+r2+r0, n-r0); spzeros(n-r0, s+r2+r0) I(n-r0)][:,[1+s:s+r0+r2; 1:s; 1+n+r0:2n]]
-#     QXfull´ = [I(r2) spzeros(r2,s) spzeros(r2,r0) spzeros(r2,n-r0);
-#                spzeros(r0,r2) spzeros(r0,s) I(r0) spzeros(r0,n-r0);
-#                spzeros(s, r2) QX´ spzeros(s,r0) spzeros(s,n-r0);
-#                spzeros(n-r0,r2) spzeros(n-r0,s) spzeros(n-r0, r0) I(n-r0)]
-#     A = QXfull´[1:r0+r2, :] * l.A * ZXfull´[:,1:r0+r2]
-#     B = QXfull´[1:r0+r2, :] * l.B * ZXfull´[:,1:r0+r2]
-#     V = l.V * ZXfull´
-#     # Q = QXfull´ * l.Q
-#     # return Linearization(Q, A, B, V)
-#     return Linearization(A, B, V)
-# end
 
 # get some columns of Z' in a full orthogonal decomposition of X
 fod_z´(X::SparseMatrixCSC, cols = :) = _fod_z´(sparse(X'), cols)
@@ -153,26 +135,11 @@ fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}, cols = :) = _fod_z´(sparse(X'),
 fod_z´(X, cols = :) = _fod_z´(X', cols)
 _fod_z´(X´, cols) = getQ(qr(X´), cols)
 
-# fod_qz´(X::SparseMatrixCSC) = _fod_qz´(sparse(X'))
-# fod_qz´(X::SubArray{<:Any,2,<:SparseMatrixCSC}) = _fod_qz´(sparse(X'))
-# fod_qz´(X) = _fod_qz´(X')
-# function _fod_qz´(X´)
-#     q = qr(X´)
-#     Z´ = getQ(q)
-#     RP´ = getRP´(q)
-#     q´ = qr(sparse(RP´'))
-#     Q´ = getQ´(q´)
-#     return Q´, Z´
-# end
-
 # carry out quadeig deflation
 function deflatedAB(lA::SparseMatrixCSC, lB, ZX´, r0, r2, s)
     selected_rows = Isparse(size(lA, 1), [1:r2; 1+s+r2:s+r0+r2], :)
-    tmp = selected_rows * lA
-    # display(sparse(tmp))
     A = view(selected_rows * lA, :, 1:s+r0+r2) * ZX´
     B = view(selected_rows * lB, :, 1:s+r0+r2) * ZX´
-    # display(sparse(ZX´))
     return A, B
 end
 
