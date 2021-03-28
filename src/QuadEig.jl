@@ -36,12 +36,18 @@ struct QuadPencilPQR{T,M,Q<:Factorization{T}}
     pencil::QuadPencil{T,M}
     qr0::Q
     qr2::Q
+    Q0::M
+    RP0::M
+    Q2´::M
+    RP2::M
 end
 
 function pqr(pencil::QuadPencil)
     qr0 = pqr!(copy(pencil.A0))
     qr2 = pqr!(copy(pencil.A2))
-    return QuadPencilPQR(pencil, qr0, qr2)
+    Q0, RP0 = getQ(qr0), getRP´(qr0)
+    Q2´, RP2 = getQ´(qr2), getRP´(qr2)
+    return QuadPencilPQR(pencil, qr0, qr2, Q0, RP0, Q2´, RP2)
 end
 
 pqr!(a::SparseMatrixCSC) = qr(a)
@@ -63,11 +69,9 @@ linearize(p::QuadPencil; qr = false) = qr ? linearize(pqr(p)) : linearizeC2(p)
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
-    Q0, Q2´ = getQ(q.qr0), getQ´(q.qr2)
-    RP0, RP2 = getRP´(q.qr0), getRP´(q.qr2)
-    V = [o z; z Q0]
-    A = [Q2´*A1 -Q2´*Q0; RP0 z]
-    B = [RP2 z; z o]
+    V = [o z; z q.Q0]
+    A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
+    B = [q.RP2 z; z o]
     B .= .- B
     return Linearization(A, B, V, true)
 end
@@ -117,13 +121,16 @@ deflate(A0, A1, A2; kw...) = deflate(quadpencil(A0, A1, A2); kw...)
 deflate(q::QuadPencil; kw...) = deflate(linearize(q; qr = true); kw...)
 
 function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
-    l = l.isqr ? l : linearize(pqr(l))
-    r0, r2 = nonzero_rows(l, atol)
+    if !l.isqr
+        l´ = linearize(pqr(l))
+        l = Linearization(l´.A, l´.B, l.V * l´.V, true)
+    end
     n = size(l, 1) ÷ 2
+    r0, r2 = nonzero_rows(l, atol)
+    r0 == n || r2 == n && return l
     s = n - r2
     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
-    deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
     return Linearization(A, B, V, false)
