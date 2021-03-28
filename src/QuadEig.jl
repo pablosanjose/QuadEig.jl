@@ -71,10 +71,8 @@ Base.size(q::QuadPencil, n...) = size(q.A0, n...)
 ### QuadPencilQR ###########################################################################
 # Pivoted QR-factorization
 ############################################################################################
-struct QuadPencilPQR{T,M,Q<:Factorization{T}}
+struct QuadPencilPQR{T,M}
     pencil::QuadPencil{T,M}
-    qr0::Q
-    qr2::Q
     Q0::M
     RP0::M
     Q2´::M
@@ -86,7 +84,7 @@ function pqr(pencil::QuadPencil)
     qr2 = pqr(pencil.A2)
     Q0, RP0 = getQ(qr0), getRP´(qr0)
     Q2´, RP2 = getQ´(qr2), getRP´(qr2)
-    return QuadPencilPQR(pencil, qr0, qr2, Q0, RP0, Q2´, RP2)
+    return QuadPencilPQR(pencil, Q0, RP0, Q2´, RP2)
 end
 
 # Sparse QR from SparseSuite is also pivoted
@@ -176,6 +174,7 @@ end
 # Generalized Schur factorization (aka QZ factorization)
 ############################################################################################
 function eigbasis(l::Linearization{T}; filter = missing) where {T}
+    n = size(l.V, 1) ÷ 2
     s = schur(Matrix(l.A), Matrix(l.B))
     γ = l.scaling.γ
     λ = γ .* s.α ./ s.β
@@ -186,9 +185,9 @@ function eigbasis(l::Linearization{T}; filter = missing) where {T}
         resize!(s.α, howmany)
         resize!(s.β, howmany)
         λ = γ .*  s.α ./ s.β
-        basis = l.V * view(s.Z, :, 1:howmany)
+        basis = view(l.V, 1:n, :) * view(s.Z, :, 1:howmany)
     else
-        basis = l.V * s.Z
+        basis = view(l.V, 1:n, :) * s.Z
     end
     chop!(basis)
     return λ, basis
