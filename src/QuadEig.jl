@@ -2,7 +2,7 @@ module QuadEig
 
 using LinearAlgebra, SparseArrays, SuiteSparse
 
-export quadpencil, pqr, linearize, deflate
+export linearize, deflate
 
 ### QuadPencil #############################################################################
 # Encodes the quadratic pencil problem
@@ -60,11 +60,9 @@ struct Linearization{T,M<:AbstractMatrix{T}}
     A::M
     B::M
     V::M
-    isqr::Bool
 end
 
-linearize(A0, A1, A2; kw...) = linearize(quadpencil(A0, A1, A2); kw...)
-linearize(p::QuadPencil; qr = false) = qr ? linearize(pqr(p)) : linearizeC2(p)
+linearize(A0, A1, A2) = linearize(pqr(quadpencil(A0, A1, A2)))
 
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
@@ -73,41 +71,18 @@ function linearize(q::QuadPencilPQR)
     A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
     B = [q.RP2 z; z o]
     B .= .- B
-    return Linearization(A, B, V, true)
-end
-
-function linearizeC2(p::QuadPencil)
-    n = size(p, 1)
-    o, z = one(p.A1), zero(p.A1)
-    A = [p.A1 -o; p.A0 z]
-    B = [-p.A2 z; z -o]
-    V = one(A)
-    return Linearization(A, B, V, false)
+    return Linearization(A, B, V)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
     print(io, summary(l), "\n",
 "  Matrix size    : $(size(l.A, 1)) × $(size(l.A, 2))
   Matrix type    : $M
-  QR-transformed : $(l.isqr)
   Deflated       : $(deflationstring(l))")
 end
 
-function quadpencil(l::Linearization{T,M}) where {T,M}
-    n = size(l, 1) ÷ 2
-    A0 = convert(M, view(l.A, n+1:2n, 1:n))
-    A1 = convert(M, view(l.A, 1:n, 1:n))
-    A2 = convert(M, view(l.B, 1:n, 1:n))
-    A2 .= .- A2
-    return quadpencil(A0, A1, A2)
-end
-
-pqr(l::Linearization) = pqr(quadpencil(l))
-
 Base.summary(l::Linearization{T}) where {T} =
     "Linearization{T}: second companion linearization of quadratic pencil"
-
-matrixtype(::Linearization{<:Any,M}) where {M} = M
 
 deflationstring(l::Linearization) =
     size(l.A) == size(l.V) ? "false" : "true ($(size(l.V, 1)) -> $(size(l.A, 1)))"
@@ -117,14 +92,9 @@ Base.size(l::Linearization, n...) = size(l.A, n...)
 ### deflate ################################################################################
 # compute deflated pencil
 ############################################################################################
-deflate(A0, A1, A2; kw...) = deflate(quadpencil(A0, A1, A2); kw...)
-deflate(q::QuadPencil; kw...) = deflate(linearize(q; qr = true); kw...)
+deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2); kw...)
 
 function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
-    if !l.isqr
-        l´ = linearize(pqr(l))
-        l = Linearization(l´.A, l´.B, l.V * l´.V, true)
-    end
     n = size(l, 1) ÷ 2
     r0, r2 = nonzero_rows(l, atol)
     r0 == n || r2 == n && return l
@@ -133,7 +103,7 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
-    return Linearization(A, B, V, false)
+    return Linearization(A, B, V)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
@@ -152,13 +122,11 @@ end
 
 function deflatedAB(lA::AbstractMatrix, lB, ZX´, r0, r2, s)
     A = similar(lA, r0+r2, r0+r2)
-    mul!(view(A, 1:r2, :), view(lA, 1:r2, 1:s+r0+r2), ZX´)
-    mul!(view(A, 1+r2:r0+r2, :), view(lA, 1+s+r2:s+r0+r2, 1:s+r0+r2), ZX´)
+    mul!(view(A, 1:r2, :), view(lA, 1:r2, 1:r2+s+r0), ZX´)
+    mul!(view(A, 1+r2:r0+r2, :), view(lA, 1+s+r2:r2+s+r0, 1:r2+s+r0), ZX´)
     B = similar(A)
-    mul!(view(B, 1:r2, :), view(lB, 1:r2, 1:s+r2), view(ZX´, 1:s+r2, :))
-    B[1+r2:r0+r2, :] .= ZX´[1+s+r2:s+r0+r2, :]
-    chop!(A)
-    chop!(B)
+    mul!(view(B, 1:r2, :), view(lB, 1:r2, 1:r2+s+r0), ZX´)
+    mul!(view(B, 1+r2:r0+r2, :), view(lB, 1+s+r2:r2+s+r0, 1:r2+s+r0), ZX´)
     return A, B
 end
 
@@ -186,12 +154,10 @@ function Idense(n, cols)
     return m
 end
 
-Isparse(n, rows, cols) = _Isparse(n, inds(rows, n), inds(cols, n))
+# Equivalent to I(n)[rows, cols], but faster
+Isparse(n, rows, cols) = Isparse(inds(rows, n), inds(cols, n))
 
-inds(::Colon, n) = 1:n
-inds(is, n) = is
-
-function _Isparse(n, rows, cols)
+function Isparse(rows, cols)
     rowval = Int[]
     nzval = Bool[]
     colptr = Vector{Int}(undef, length(cols) + 1)
@@ -202,6 +168,9 @@ function _Isparse(n, rows, cols)
     end
     return SparseMatrixCSC(length(rows), length(cols), colptr, rowval, nzval)
 end
+
+inds(::Colon, n) = 1:n
+inds(is, n) = is
 
 function push_rows!(rowval, nzval, rows::AbstractUnitRange, col)
     if col in rows
@@ -239,13 +208,6 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
         n += 1
     end
     return n
-end
-
-function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
-    for (i, a) in enumerate(A)
-        abs(a) < atol && (A[i] = zero(T))
-    end
-    return A
 end
 
 end # Module
