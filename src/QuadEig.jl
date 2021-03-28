@@ -2,7 +2,44 @@ module QuadEig
 
 using LinearAlgebra, SparseArrays, SuiteSparse
 
-export linearize, deflate
+export linearize, deflate, eigbasis
+
+### PencilScaling ##########################################################################
+# Compute the optimal scaling
+############################################################################################
+struct PencilScaling{T}
+    γ::T
+    δ::T
+end
+
+function pencilscaling(A0::M, A1::M, A2::M; scaling = nothing) where {T,M<:AbstractMatrix{T}}
+    scaling === nothing && return PencilScaling(T(1), T(1))
+    n0, n1, n2 = opnorm.(Matrix.((A0, A1, A2)))
+    τ = n1 / sqrt(n0 * n2)
+    if τ <= 1
+        γ = sqrt(n0 / n2)
+        δ = 2 / (n0 + γ * n1)
+    elseif scaling === -
+        # distinct tropical roots, choose γ+ to favor large eigenvalues
+        γ = n1 / n2
+        δ = 1 / max(n2 * γ^2, n1 * γ, n0)
+    else
+        # distinct tropical roots, choose γ- to favor small eigenvalues
+        γ = n0 / n1
+        δ = 1 / max(n2 * γ^2, n1 * γ, n0)
+    end
+    return PencilScaling(T(γ), T(δ))
+end
+
+function scale!(A0, A1, A2, s::PencilScaling)
+    γ, δ = s.γ, s.δ
+    if γ != 1 || δ != 1
+        A0 .*= γ^2 * δ
+        A1 .*= γ * δ
+        A2 .*= δ
+    end
+    return A0, A1, A2
+end
 
 ### QuadPencil #############################################################################
 # Encodes the quadratic pencil problem
@@ -11,26 +48,28 @@ struct QuadPencil{T<:Complex,M<:AbstractMatrix{T}}
     A0::M
     A1::M
     A2::M
+    scaling::PencilScaling{T}
 end
 
-function quadpencil(A0, A1, A2)
+function quadpencil(A0, A1, A2; kw...)
     size(A0) == size(A1) == size(A2) && size(A0, 1) == size(A0, 2) ||
         throw(DimensionMismatch("Expected square matrices of the same size"))
     ptype = complex(promote_type(eltype(A0), eltype(A1), eltype(A2)))
-    A0´ = unwrap_adjoint(A0, ptype)
-    A1´ = unwrap_adjoint(A1, ptype)
-    A2´ = unwrap_adjoint(A2, ptype)
-    return QuadPencil(A0´, A1´, A2´)
+    A0´ = copy_to_eltype(A0, ptype)
+    A1´ = copy_to_eltype(A1, ptype)
+    A2´ = copy_to_eltype(A2, ptype)
+    s = pencilscaling(A0´, A1´, A2´; kw...)
+    scale!(A0´, A1´, A2´, s)
+    return QuadPencil(A0´, A1´, A2´, s)
 end
 
-unwrap_adjoint(A::Adjoint, ::Type{T}) where {T} = copy!(similar(A, T, size(A)), A)
-unwrap_adjoint(A::AbstractMatrix{T´}, ::Type{T}) where {T´,T} = copy!(similar(A, T, size(A)), A)
-unwrap_adjoint(A::AbstractMatrix{T}, ::Type{T}) where {T} = A
+# This also ensures any Adjoint/Transpose wrapper is removed
+copy_to_eltype(A, ::Type{T}) where {T} = copy!(similar(A, T, size(A)), A)
 
 Base.size(q::QuadPencil, n...) = size(q.A0, n...)
 
 ### QuadPencilQR ###########################################################################
-# pivoted QR-factorization
+# Pivoted QR-factorization
 ############################################################################################
 struct QuadPencilPQR{T,M,Q<:Factorization{T}}
     pencil::QuadPencil{T,M}
@@ -43,15 +82,16 @@ struct QuadPencilPQR{T,M,Q<:Factorization{T}}
 end
 
 function pqr(pencil::QuadPencil)
-    qr0 = pqr!(copy(pencil.A0))
-    qr2 = pqr!(copy(pencil.A2))
+    qr0 = pqr(pencil.A0)
+    qr2 = pqr(pencil.A2)
     Q0, RP0 = getQ(qr0), getRP´(qr0)
     Q2´, RP2 = getQ´(qr2), getRP´(qr2)
     return QuadPencilPQR(pencil, qr0, qr2, Q0, RP0, Q2´, RP2)
 end
 
-pqr!(a::SparseMatrixCSC) = qr(a)
-pqr!(a) = qr!(a, Val(true))
+# Sparse QR from SparseSuite is also pivoted
+pqr(a::SparseMatrixCSC) = qr(a)
+pqr(a) = qr!(copy(a), Val(true))
 
 ### Linearized Pencils #####################################################################
 # Build second companion linearization, or its Q*C2*V rotation
@@ -60,9 +100,10 @@ struct Linearization{T,M<:AbstractMatrix{T}}
     A::M
     B::M
     V::M
+    scaling::PencilScaling{T}
 end
 
-linearize(A0, A1, A2) = linearize(pqr(quadpencil(A0, A1, A2)))
+linearize(A0, A1, A2; kw...) = linearize(pqr(quadpencil(A0, A1, A2; kw...)))
 
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
@@ -71,13 +112,14 @@ function linearize(q::QuadPencilPQR)
     A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
     B = [q.RP2 z; z o]
     B .= .- B
-    return Linearization(A, B, V)
+    return Linearization(A, B, V, q.pencil.scaling)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
     print(io, summary(l), "\n",
 "  Matrix size    : $(size(l.A, 1)) × $(size(l.A, 2))
   Matrix type    : $M
+  Scalings γ, δ  : $(real(l.scaling.γ)), $(real(l.scaling.δ))
   Deflated       : $(deflationstring(l))")
 end
 
@@ -90,7 +132,7 @@ deflationstring(l::Linearization) =
 Base.size(l::Linearization, n...) = size(l.A, n...)
 
 ### deflate ################################################################################
-# compute deflated pencil
+# Compute deflated pencil
 ############################################################################################
 deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2); kw...)
 
@@ -103,7 +145,7 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
-    return Linearization(A, B, V)
+    return Linearization(A, B, V, l.scaling)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
@@ -130,7 +172,29 @@ function deflatedAB(lA::AbstractMatrix, lB, ZX´, r0, r2, s)
     return A, B
 end
 
-### Tools ################################################################################
+### quadeig ################################################################################
+# Generalized Schur factorization (aka QZ factorization)
+############################################################################################
+function eigbasis(l::Linearization{T}; filter = missing) where {T}
+    s = schur(Matrix(l.A), Matrix(l.B))
+    γ = l.scaling.γ
+    λ = γ .* s.α ./ s.β
+    if filter !== missing
+        which = filter.(λ)
+        howmany = count(which)
+        ordschur!(s, which)
+        resize!(s.α, howmany)
+        resize!(s.β, howmany)
+        λ = γ .*  s.α ./ s.β
+        basis = l.V * view(s.Z, :, 1:howmany)
+    else
+        basis = l.V * s.Z
+    end
+    chop!(basis)
+    return λ, basis
+end
+
+### Tools ##################################################################################
 
 getQ(qr::Factorization, cols = :) = qr.Q * Idense(size(qr, 1), cols)
 getQ(qr::SuiteSparse.SPQR.QRSparse, cols = :) =  Isparse(size(qr, 1), :, qr.prow) * sparse(qr.Q * Idense(size(qr, 1), cols))
@@ -208,6 +272,13 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
         n += 1
     end
     return n
+end
+
+function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
+    for (i, a) in enumerate(A)
+        abs(a) < atol && (A[i] = zero(T))
+    end
+    return A
 end
 
 end # Module
