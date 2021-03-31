@@ -12,7 +12,7 @@ struct PencilScaling{T}
     δ::T
 end
 
-function pencilscaling(A0::M, A1::M, A2::M; scaling = nothing) where {T,M<:AbstractMatrix{T}}
+function pencilscaling(A0::M, A1::M, A2::M; scaling = nothing, kw...) where {T,M<:AbstractMatrix{T}}
     scaling === nothing && return PencilScaling(T(1), T(1))
     n0, n1, n2 = opnorm.(Matrix.((A0, A1, A2)))
     τ = n1 / sqrt(n0 * n2)
@@ -32,7 +32,7 @@ function pencilscaling(A0::M, A1::M, A2::M; scaling = nothing) where {T,M<:Abstr
 end
 
 function scale!(A0, A1, A2, s::PencilScaling)
-    γ, δ = s.γ, s.δ
+    γ, δ = scalingfactors(s)
     if γ != 1 || δ != 1
         A0 .*= γ^2 * δ
         A1 .*= γ * δ
@@ -40,6 +40,8 @@ function scale!(A0, A1, A2, s::PencilScaling)
     end
     return A0, A1, A2
 end
+
+scalingfactors(s::PencilScaling) = s.γ, s.δ
 
 ### QuadPencil #############################################################################
 # Encodes the quadratic pencil problem
@@ -94,12 +96,16 @@ pqr(a) = qr!(copy(a), Val(true))
 ### Linearized Pencils #####################################################################
 # Build second companion linearization, or its Q*C2*V rotation
 ############################################################################################
-struct Linearization{T,M<:AbstractMatrix{T}}
+struct Linearization{T,M<:AbstractMatrix{T},R}
+    pencilpqr::QuadPencilPQR{T,M}
     A::M
     B::M
     V::M
-    scaling::PencilScaling{T}
+    deflate_tol::R
 end
+
+Linearization(q::QuadPencilPQR{T,M}, A::M, B::M, V::M) where {T,M} =
+    Linearization(q, A, B, V, zero(real(T)))
 
 linearize(A0, A1, A2; kw...) = linearize(pqr(quadpencil(A0, A1, A2; kw...)))
 
@@ -110,14 +116,14 @@ function linearize(q::QuadPencilPQR)
     A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
     B = [q.RP2 z; z o]
     B .= .- B
-    return Linearization(A, B, V, q.pencil.scaling)
+    return Linearization(q, A, B, V)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
     print(io, summary(l), "\n",
 "  Matrix size    : $(size(l.A, 1)) × $(size(l.A, 2))
   Matrix type    : $M
-  Scalings γ, δ  : $(real(l.scaling.γ)), $(real(l.scaling.δ))
+  Scalings γ, δ  : $(real.(scalingfactors(l)))
   Deflated       : $(deflationstring(l))")
 end
 
@@ -125,16 +131,23 @@ Base.summary(l::Linearization{T}) where {T} =
     "Linearization{T}: second companion linearization of quadratic pencil"
 
 deflationstring(l::Linearization) =
-    size(l.A) == size(l.V) ? "false" : "true ($(size(l.V, 1)) -> $(size(l.A, 1)))"
+    isdeflated(l) ? "true ($(size(l.V, 1)) -> $(size(l.A, 1)))" : "false"
+
+isdeflated(l) = !iszero(l.deflate_tol)
 
 Base.size(l::Linearization, n...) = size(l.A, n...)
+
+dimpencil(l::Linearization) = size(l.V, 1) ÷ 2
+
+scalingfactors(l::Linearization) = scalingfactors(l.pencilpqr.pencil.scaling)
 
 ### deflate ################################################################################
 # Compute deflated pencil
 ############################################################################################
-deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2); kw...)
+deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2; kw...); kw...)
 
-function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
+function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T}
+    isdeflated(l) && return l
     n = size(l, 1) ÷ 2
     r0, r2 = nonzero_rows(l, atol)
     r0 == n || r2 == n && return l
@@ -143,7 +156,8 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T)))) where {T}
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
-    return Linearization(A, B, V, l.scaling)
+    q = l.pencilpqr
+    return Linearization(q, A, B, V, atol)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
@@ -173,25 +187,60 @@ end
 ### quadeig ################################################################################
 # Generalized Schur factorization (aka QZ factorization)
 ############################################################################################
-function eigbasis(l::Linearization{T}; filter = missing) where {T}
-    n = size(l.V, 1) ÷ 2
+function eigbasis(l::Linearization{T}; filter = missing, full = false) where {T}
     s = schur(Matrix(l.A), Matrix(l.B))
-    γ = l.scaling.γ
-    λ = γ .* s.α ./ s.β
-    if filter !== missing
-        which = filter.(λ)
-        howmany = count(which)
-        ordschur!(s, which)
-        resize!(s.α, howmany)
-        resize!(s.β, howmany)
-        λ = γ .*  s.α ./ s.β
-        basis = view(l.V, 1:n, :) * view(s.Z, :, 1:howmany)
-    else
-        basis = view(l.V, 1:n, :) * s.Z
+    λ, basis = filtered_eigbasis(filter, s, l)
+    if full
+        λ0, extras = extra_nullspace(filter, l)
+        basis = hcat(extras, basis)
+        prepend!(λ, Iterators.repeated(λ0, size(extras, 2)))
     end
-    chop!(basis)
+    LinearAlgebra.sorteig!(λ, basis)
     return λ, basis
 end
+
+function filtered_eigbasis(filter, s, l)
+    λs = get_eigvals(s, l)
+    which = which_λs(filter, λs)
+    howmany = count(which)
+    ordschur!(s, which)
+    resize!(s.α, howmany)
+    resize!(s.β, howmany)
+    λ = get_eigvals(s, l)
+    basis = view(l.V, 1:dimpencil(l), :) * view(s.Z, :, 1:howmany)
+    return λ, basis
+end
+
+function filtered_eigbasis(::Missing, s, l)
+    λ = get_eigvals(s, l)
+    basis = view(l.V, 1:dimpencil(l), :) * s.Z
+    return λ, basis
+end
+
+function get_eigvals(s, l)
+    γ, _ = scalingfactors(l)
+    λs = chop!(γ .*  s.α ./ s.β, l.deflate_tol)
+    return λs
+end
+
+which_λs(::typeof(-), λs) = abs.(λs) .<= 1
+which_λs(::typeof(+), λs) = abs.(λs) .>= 1
+
+function extra_nullspace(::typeof(-), l::Linearization{T}) where {T}
+    r = nonzero_rows(l.pencilpqr.RP2, l.deflate_tol)
+    extras = view(l.pencilpqr.Q2´', :, r+1:dimpencil(l))
+    λ0 = zero(T)
+    return λ0, extras
+end
+
+function extra_nullspace(::typeof(+), l::Linearization{T}) where {T}
+    r = nonzero_rows(l.pencilpqr.RP0, l.deflate_tol)
+    extras = view(l.pencilpqr.Q0, :, r+1:dimpencil(l))
+    λ0 = T(Inf)
+    return λ0, extras
+end
+
+extra_nullspace(f, l) = throw(ArgumentError("Full basis requires `filter = +` or `filter = -`"))
 
 ### Tools ##################################################################################
 
@@ -275,7 +324,11 @@ end
 
 function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
     for (i, a) in enumerate(A)
-        abs(a) < atol && (A[i] = zero(T))
+        if abs(a) < atol
+            A[i] = zero(T)
+        elseif abs(a) > 1/atol || isnan(a)
+            A[i] = T(Inf)
+        end
     end
     return A
 end
