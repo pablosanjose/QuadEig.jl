@@ -100,23 +100,25 @@ struct Linearization{T,M<:AbstractMatrix{T},R}
     pencilpqr::QuadPencilPQR{T,M}
     A::M
     B::M
+    Q::M
     V::M
     deflate_tol::R
 end
 
-Linearization(q::QuadPencilPQR{T,M}, A::M, B::M, V::M) where {T,M} =
-    Linearization(q, A, B, V, zero(real(T)))
+Linearization(q::QuadPencilPQR{T,M}, A::M, B::M, Q::M, V::M) where {T,M} =
+    Linearization(q, A, B, Q, V, zero(real(T)))
 
 linearize(A0, A1, A2; kw...) = linearize(pqr(quadpencil(A0, A1, A2; kw...)))
 
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
+    Q = [q.Q2´ z; z q.Q0']
     V = [o z; z q.Q0]
     A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
     B = [q.RP2 z; z o]
     B .= .- B
-    return Linearization(q, A, B, V)
+    return Linearization(q, A, B, Q, V)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
@@ -156,13 +158,14 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
+    Q = l.Q[[1:r2; n+1:n+r0], :]
     q = l.pencilpqr
-    return Linearization(q, A, B, V, atol)
+    return Linearization(q, A, B, Q, V, atol)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
-fod_z´(X::SparseMatrixCSC, cols = :) = _fod_z´(sparse(X'), cols)
-fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}, cols = :) = _fod_z´(sparse(X'), cols)
+fod_z´(X::SparseMatrixCSC, cols) = _fod_z´(sparse(X'), cols)
+fod_z´(X::SubArray{<:Any,2,<:SparseMatrixCSC}, cols) = _fod_z´(sparse(X'), cols)
 fod_z´(X, cols = :) = _fod_z´(X', cols)
 _fod_z´(X´, cols) = getQ(qr(X´), cols)
 
@@ -187,60 +190,56 @@ end
 ### quadeig ################################################################################
 # Generalized Schur factorization (aka QZ factorization)
 ############################################################################################
-function eigbasis(l::Linearization{T}; filter = missing, full = false) where {T}
-    s = schur(Matrix(l.A), Matrix(l.B))
-    λ, basis = filtered_eigbasis(filter, s, l)
-    if full
-        λ0, extras = extra_nullspace(filter, l)
-        basis = hcat(extras, basis)
-        prepend!(λ, Iterators.repeated(λ0, size(extras, 2)))
-    end
-    LinearAlgebra.sorteig!(λ, basis)
-    return λ, basis
+function retarded_projector(A0, A1, A2; kw...)
+    d´ = deflate(A0', A1', A2'; kw...)
+    n = dimpencil(d´)
+    atol = d´.deflate_tol
+    γ, _ = scalingfactors(d´)
+
+    # e = eigen(Matrix(d´.A'), Matrix(d´.B'))
+    # b = d´.Q' * e.vectors
+    # display(e.values)
+    # @show real.(b[1:n, 18])
+    # @show e.values[18] .* real.(b[1+n:2n, 18])
+
+    λ, Z = retarded_deflated_eigbasis(d´.A', d´.B', γ, atol)
+    basis = d´.Q' * Z
+
+    nullbasis = nullspace_basis(A2, atol)
+    
+    # display(sparse(d´.Q'))
+    A, B = AB_C2(A0',A1',A2'; kw...)
+    # display(sparse(A'))
+    display(d´.V' * A' * d´.Q' - d´.A')
+    display(sparse(basis))
+
+    Z11 = hcat(view(basis, 1:n, :), nullbasis)
+    Z21 = hcat(view(basis, n+1:2n, :), zero(nullbasis))
+    # display(sparse(Z11))
+    # display(sparse(Z21))
+    # projector = rdiv!(Z21, lu!(Z11))  # equivalent to Z21*Z11
+    # return projector
 end
 
-function filtered_eigbasis(filter, s, l)
-    λs = get_eigvals(s, l)
-    which = which_λs(filter, λs)
-    howmany = count(which)
-    ordschur!(s, which)
-    resize!(s.α, howmany)
-    resize!(s.β, howmany)
-    λ = get_eigvals(s, l)
-    basis = view(l.V, 1:dimpencil(l), :) * view(s.Z, :, 1:howmany)
-    return λ, basis
+function retarded_deflated_eigbasis(A, B, γ, atol)
+    s = schur!(Matrix(A), Matrix(B))
+    λs = chop!(γ .*  s.α ./ s.β, atol)
+    which_retarded = abs2.(λs) .<= 1
+    howmany_retarded = count(which_retarded)
+    ordschur!(s, which_retarded)
+    defbasis = view(s.Z, :, 1:howmany_retarded)
+    λ = chop!(γ .*  s.α ./ s.β, atol)
+    return λ, defbasis
 end
 
-function filtered_eigbasis(::Missing, s, l)
-    λ = get_eigvals(s, l)
-    basis = view(l.V, 1:dimpencil(l), :) * s.Z
-    return λ, basis
+function nullspace_basis(A, atol)
+    q = pqr(A)
+    RP´ = getRP´(q)
+    r = nonzero_rows(RP´, atol)
+    cols = r+1:size(A, 2)
+    basis = getQ(q, cols)
+    return basis
 end
-
-function get_eigvals(s, l)
-    γ, _ = scalingfactors(l)
-    λs = chop!(γ .*  s.α ./ s.β, l.deflate_tol)
-    return λs
-end
-
-which_λs(::typeof(-), λs) = abs.(λs) .<= 1
-which_λs(::typeof(+), λs) = abs.(λs) .>= 1
-
-function extra_nullspace(::typeof(-), l::Linearization{T}) where {T}
-    r = nonzero_rows(l.pencilpqr.RP2, l.deflate_tol)
-    extras = view(l.pencilpqr.Q2´', :, r+1:dimpencil(l))
-    λ0 = zero(T)
-    return λ0, extras
-end
-
-function extra_nullspace(::typeof(+), l::Linearization{T}) where {T}
-    r = nonzero_rows(l.pencilpqr.RP0, l.deflate_tol)
-    extras = view(l.pencilpqr.Q0, :, r+1:dimpencil(l))
-    λ0 = T(Inf)
-    return λ0, extras
-end
-
-extra_nullspace(f, l) = throw(ArgumentError("Full basis requires `filter = +` or `filter = -`"))
 
 ### Tools ##################################################################################
 
@@ -331,6 +330,15 @@ function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
         end
     end
     return A
+end
+
+function AB_C2(A0, A1, A2; kw...)
+    p = quadpencil(A0, A1, A2; kw...)
+    n = size(p, 1)
+    o, z = one(p.A1), zero(p.A1)
+    A = [p.A1 -o; p.A0 z]
+    B = [-p.A2 z; z -o]
+    return A, B
 end
 
 end # Module
