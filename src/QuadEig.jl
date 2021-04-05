@@ -162,8 +162,6 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
     q = l.pencilpqr
-    chop!(A)
-    chop!(B)
     return Linearization(q, A, B, V, atol)
 end
 
@@ -269,17 +267,6 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
         n += 1
     end
     return n
-end
-
-function chop!(A::AbstractArray{T}, atol = sqrt(eps(real(T)))) where {T}
-    for (i, a) in enumerate(A)
-        if abs(a) < atol
-            A[i] = zero(T)
-        elseif abs(a) > 1/atol || isnan(a)
-            A[i] = T(Inf)
-        end
-    end
-    return A
 end
 
 end # Module
