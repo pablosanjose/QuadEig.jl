@@ -58,13 +58,6 @@ julia> eigvals(l.A, l.B)  # Note the 3 zero (within machine precision) and 2 inf
 
 julia> d = deflate(l)  # or deflate(A₀, A₁, A₂)
 Linearization{T}: second companion linearization of quadratic pencil
-  Matrix size    : 15 × 15
-  Matrix type    : Matrix{ComplexF64}
-  Scalings γ, δ  : (1.0, 1.0)
-  Deflated       : true (20 -> 15)
-
-julia> d = deflate(l)  # or deflate(A₀, A₁, A₂)
-Linearization{T}: second companion linearization of quadratic pencil
   Matrix size    : 7 × 7
   Matrix type    : Matrix{ComplexF64}
   Scalings γ, δ  : (1.0, 1.0)
