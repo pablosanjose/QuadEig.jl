@@ -1,5 +1,5 @@
 using QuadEig
-using Test, LinearAlgebra, SparseArrays
+using Test, Random, LinearAlgebra, SparseArrays
 
 function check(A₀, A₁, A₂; atol = sqrt(eps(real(eltype(A₀)))))
     A, B, V = linearize(A₀, A₁, A₂)
@@ -32,15 +32,13 @@ function normalize_vecs(φ)
 end
 
 @testset "QuadEig.jl" begin
+    Random.seed!(1234)
+    
     A₀ = rand(6,6); A₁ = rand(6, 6); A₂ = rand(6, 6);
     A₀[:, 1:3] .= A₀[:, 4:6]; A₂[:, 2:3] .= A₂[:, 4:5];
     @test check(A₀, A₁, A₂)
 
     A₀ = rand(ComplexF64, 6, 6); A₁ = rand(6, 6); A₂ = rand(6, 6);
-    A₀[:, 1:3] .= A₀[:, 4:6]; A₂[:, 2:3] .= A₂[:, 4:5];
-    @test check(A₀, A₁, A₂)
-
-    A₀ = sprand(ComplexF64, 20, 20, 0.1); A₁ = sprand(ComplexF64, 20, 20, 0.1); A₂ = sprand(ComplexF64, 20, 20, 0.1);
     A₀[:, 1:3] .= A₀[:, 4:6]; A₂[:, 2:3] .= A₂[:, 4:5];
     @test check(A₀, A₁, A₂)
 
