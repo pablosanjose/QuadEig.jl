@@ -2,7 +2,7 @@ module QuadEig
 
 using LinearAlgebra, SparseArrays, SuiteSparse
 
-export linearize, deflate, eigbasis
+export linearize, deflate
 
 ### PencilScaling ##########################################################################
 # Compute the optimal scaling
@@ -141,6 +141,11 @@ dimpencil(l::Linearization) = size(l.V, 1) ÷ 2
 
 scalingfactors(l::Linearization) = scalingfactors(l.pencilpqr.pencil.scaling)
 
+Base.iterate(l::Linearization) = l.A, Val(:B)
+Base.iterate(l::Linearization, ::Val{:B}) = l.B, Val(:V)
+Base.iterate(l::Linearization, ::Val{:V}) = l.V, Val(:done)
+Base.iterate(l::Linearization, ::Val{:done}) = nothing
+
 ### deflate ################################################################################
 # Compute deflated pencil
 ############################################################################################
@@ -183,64 +188,6 @@ function deflatedAB(lA::AbstractMatrix, lB, ZX´, r0, r2, s)
     mul!(view(B, 1+r2:r0+r2, :), view(lB, 1+s+r2:r2+s+r0, 1:r2+s+r0), ZX´)
     return A, B
 end
-
-### quadeig ################################################################################
-# Generalized Schur factorization (aka QZ factorization)
-############################################################################################
-function eigbasis(l::Linearization{T}; filter = missing, full = false) where {T}
-    s = schur(Matrix(l.A), Matrix(l.B))
-    λ, basis = filtered_eigbasis(filter, s, l)
-    if full
-        λ0, extras = extra_nullspace(filter, l)
-        basis = hcat(extras, basis)
-        prepend!(λ, Iterators.repeated(λ0, size(extras, 2)))
-    end
-    LinearAlgebra.sorteig!(λ, basis)
-    return λ, basis
-end
-
-function filtered_eigbasis(filter, s, l)
-    λs = get_eigvals(s, l)
-    which = which_λs(filter, λs)
-    howmany = count(which)
-    ordschur!(s, which)
-    resize!(s.α, howmany)
-    resize!(s.β, howmany)
-    λ = get_eigvals(s, l)
-    basis = view(l.V, 1:dimpencil(l), :) * view(s.Z, :, 1:howmany)
-    return λ, basis
-end
-
-function filtered_eigbasis(::Missing, s, l)
-    λ = get_eigvals(s, l)
-    basis = view(l.V, 1:dimpencil(l), :) * s.Z
-    return λ, basis
-end
-
-function get_eigvals(s, l)
-    γ, _ = scalingfactors(l)
-    λs = chop!(γ .*  s.α ./ s.β, l.deflate_tol)
-    return λs
-end
-
-which_λs(::typeof(-), λs) = abs.(λs) .<= 1
-which_λs(::typeof(+), λs) = abs.(λs) .>= 1
-
-function extra_nullspace(::typeof(-), l::Linearization{T}) where {T}
-    r = nonzero_rows(l.pencilpqr.RP2, l.deflate_tol)
-    extras = view(l.pencilpqr.Q2´', :, r+1:dimpencil(l))
-    λ0 = zero(T)
-    return λ0, extras
-end
-
-function extra_nullspace(::typeof(+), l::Linearization{T}) where {T}
-    r = nonzero_rows(l.pencilpqr.RP0, l.deflate_tol)
-    extras = view(l.pencilpqr.Q0, :, r+1:dimpencil(l))
-    λ0 = T(Inf)
-    return λ0, extras
-end
-
-extra_nullspace(f, l) = throw(ArgumentError("Full basis requires `filter = +` or `filter = -`"))
 
 ### Tools ##################################################################################
 

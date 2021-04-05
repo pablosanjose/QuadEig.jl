@@ -14,14 +14,20 @@ possible linearizations. The eigenvectors `φ´` of `L` will be related to the o
 a way that depends on the chosen linearization.
 
 The `quadeig` algorithm helps to more efficiently solve the `L(λ)φ´ = 0` problem by
-transforming `L(λ)` into a smaller `L₋(λ)` that shares the same finite eigenvalues as `L`,
-but has less (or no) `λ = 0` and `λ = ∞` eigenvalues which one wants to discard. This
-process is called "deflation".
+transforming `L(λ)` into a smaller `L₋(λ) = Q L(λ) V` with orthogonal `Q` and `V` operators.
+`L₋(λ)` shares the same finite eigenvalues as `L`, but has less (or no) `λ = 0` and `λ = ∞`
+eigenvalues which one wants to discard. This process is called "deflation".
 
 The algorithm relies on the specific structure of the so-called second companion
-linearization `L₂`, defined by matrices `A = [A₁ -I; A₀ 0], B = [A₂ 0; 0 -I]` of size `2N`.
-The right-eigenvectors of the original problem `Q` are obtained from those of `L₂` (deflated
-or not) by `φ = φ´[1:N]`.
+linearization, defined by matrices `A = [A₁ -I; A₀ 0], B = [A₂ 0; 0 -I]` of size `2N`. The
+right-eigenvectors of the original problem `Q` are obtained from those of `L` (deflated or
+not) by `φ = V * φ´[1:N]`, where `V` is the deflation transformation on the right. For
+undeflated linearizations, `V` is not the identity, because a non-deflating transformation
+of the second companion linearization is performed for performance reasons.
+
+The QuadEig package exports a `linearize` function to build `L`, and a `deflate` function to
+transform an `L` into a deflated `L₋`. The `A`, `B` and `V` matrices of a linearization `l`
+can be accessed by `l.A`, `l.B` and `l.V`, or through destructuring `A, B, V = l`.
 
 Example
 
