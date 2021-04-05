@@ -150,7 +150,7 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T
     isdeflated(l) && return l
     n = size(l, 1) ÷ 2
     r0, r2 = nonzero_rows(l, atol)
-    r0 == n || r2 == n && return l
+    r0 == n && r2 == n && return l
     s = n - r2
     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
