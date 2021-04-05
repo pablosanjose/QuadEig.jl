@@ -18,7 +18,6 @@ function check(A₀, A₁, A₂; atol = sqrt(eps(real(eltype(A₀)))))
                 break
             end
         end
-        test || @show id, ld
         push!(tests, test)
     end
     return all(tests)
