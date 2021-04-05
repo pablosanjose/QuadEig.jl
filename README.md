@@ -19,7 +19,7 @@ transforming `L(λ)` into a smaller `L₋(λ) = Q L(λ) V` with orthogonal `Q` a
 eigenvalues which one wants to discard. This process is called "deflation".
 
 The algorithm relies on the specific structure of the so-called second companion
-linearization, defined by matrices `A = [A₁ -I; A₀ 0], B = [A₂ 0; 0 -I]` of size `2N`. The
+linearization, defined by matrices `A = [A₁ -I; A₀ 0], B = [-A₂ 0; 0 -I]` of size `2N`. The
 right-eigenvectors of the original problem `Q` are obtained from those of `L` (deflated or
 not) by `φ = V * φ´[1:N]`, where `V` is the deflation transformation on the right. For
 undeflated linearizations, `V` is not the identity, because a non-deflating transformation

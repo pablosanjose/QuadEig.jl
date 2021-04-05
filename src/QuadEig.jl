@@ -162,6 +162,8 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
     V = view(l.V, :, 1:n+r0) * ZX´
     q = l.pencilpqr
+    chop!(A)
+    chop!(B)
     return Linearization(q, A, B, V, atol)
 end
 
