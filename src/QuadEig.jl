@@ -105,23 +105,25 @@ struct Linearization{T,M<:AbstractMatrix{T},R}
     pencilpqr::QuadPencilPQR{T,M}
     A::M
     B::M
+    Q::M
     V::M
     deflate_tol::R
 end
 
-Linearization(q::QuadPencilPQR{T,M}, A::M, B::M, V::M) where {T,M} =
-    Linearization(q, A, B, V, zero(real(T)))
+Linearization(q::QuadPencilPQR{T,M}, mats::M...) where {T,M} =
+    Linearization(q, mats..., zero(real(T)))
 
 linearize(A0, A1, A2; kw...) = linearize(pqr(quadpencil(A0, A1, A2; kw...)))
 
 function linearize(q::QuadPencilPQR)
     A0, A1, A2 = q.pencil.A0, q.pencil.A1, q.pencil.A2
     o, z = one(A1), zero(A1)
+    Q = [q.Q2´ z; z q.Q0']
     V = [o z; z q.Q0]
     A = [q.Q2´*A1 -q.Q2´*q.Q0; q.RP0 z]
     B = [q.RP2 z; z o]
     B .= .- B
-    return Linearization(q, A, B, V)
+    return Linearization(q, A, B, Q, V)
 end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
@@ -147,7 +149,8 @@ quadpencil(l::Linearization) = l.pencilpqr.pencil
 Base.size(l::Linearization, n...) = size(l.A, n...)
 
 Base.iterate(l::Linearization) = l.A, Val(:B)
-Base.iterate(l::Linearization, ::Val{:B}) = l.B, Val(:V)
+Base.iterate(l::Linearization, ::Val{:B}) = l.B, Val(:Q)
+Base.iterate(l::Linearization, ::Val{:Q}) = l.Q, Val(:V)
 Base.iterate(l::Linearization, ::Val{:V}) = l.V, Val(:done)
 Base.iterate(l::Linearization, ::Val{:done}) = nothing
 
@@ -165,9 +168,10 @@ function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T
     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
     ZX´ = fod_z´(X, 1+s:s+r0+r2)
     A, B = deflatedAB(l.A, l.B, ZX´, r0, r2, s)
+    Q = l.Q[[1:r2; n+1:n+r0], :]
     V = view(l.V, :, 1:n+r0) * ZX´
     q = l.pencilpqr
-    return Linearization(q, A, B, V, atol)
+    return Linearization(q, A, B, Q, V, atol)
 end
 
 # get some columns of Z' in a full orthogonal decomposition of X
