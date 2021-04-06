@@ -258,18 +258,18 @@ function push_rows!(rowval, nzval, rows, col)
     return nothing
 end
 
-function nonzero_rows(l::Linearization{T}, atol = sqrt(eps(real(T)))) where {T}
+function nonzero_rows(l::Linearization{T}, atol = default_tol(T)) where {T}
     n = size(l, 2) ÷ 2
     rank0, rank2 = nonzero_rows(view(l.A, n+1:2n, 1:n), atol), nonzero_rows(view(l.B, 1:n, 1:n), atol)
     return rank0, rank2
 end
 
-function nonzero_rows(p::QuadPencilPQR{T}, atol = sqrt(eps(real(T)))) where {T}
+function nonzero_rows(p::QuadPencilPQR{T}, atol = default_tol(T)) where {T}
     rank0, rank2 = nonzero_rows(p.qr0.R, atol), nonzero_rows(p.qr2.R, atol)
     return rank0, rank2
 end
 
-function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
+function nonzero_rows(m::AbstractMatrix{T}, atol = default_tol(T)) where {T}
     n = 0
     for row in eachrow(m)
         all(z -> abs(z) < atol, row) && break
@@ -277,5 +277,7 @@ function nonzero_rows(m::AbstractMatrix{T}, atol = sqrt(eps(real(T)))) where {T}
     end
     return n
 end
+
+default_tol(::Type{T}) where {T} = sqrt(eps(real(T)))
 
 end # Module
