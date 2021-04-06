@@ -70,6 +70,11 @@ copy_to_eltype(A, ::Type{T}) where {T} = copy!(similar(A, T, size(A)), A)
 
 Base.size(q::QuadPencil, n...) = size(q.A0, n...)
 
+Base.iterate(p::QuadPencil) = p.A0, Val(:A1)
+Base.iterate(p::QuadPencil, ::Val{:A1}) = p.A1, Val(:A2)
+Base.iterate(p::QuadPencil, ::Val{:A2}) = p.A2, Val(:done)
+Base.iterate(p::QuadPencil, ::Val{:done}) = nothing
+
 ### QuadPencilQR ###########################################################################
 # Pivoted QR-factorization
 ############################################################################################
@@ -135,11 +140,11 @@ deflationstring(l::Linearization) =
 
 isdeflated(l) = !iszero(l.deflate_tol)
 
-Base.size(l::Linearization, n...) = size(l.A, n...)
-
-dimpencil(l::Linearization) = size(l.V, 1) ÷ 2
-
 scalingfactors(l::Linearization) = scalingfactors(l.pencilpqr.pencil.scaling)
+
+quadpencil(l::Linearization) = l.pencilpqr.pencil
+
+Base.size(l::Linearization, n...) = size(l.A, n...)
 
 Base.iterate(l::Linearization) = l.A, Val(:B)
 Base.iterate(l::Linearization, ::Val{:B}) = l.B, Val(:V)
