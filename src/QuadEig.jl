@@ -135,7 +135,7 @@ function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
 end
 
 Base.summary(l::Linearization{T}) where {T} =
-    "Linearization{T}: second companion linearization of quadratic pencil"
+    "Linearization{$T}: second companion linearization of quadratic pencil"
 
 deflationstring(l::Linearization) =
     isdeflated(l) ? "true ($(size(l.V, 1)) -> $(size(l.A, 1)))" : "false"
