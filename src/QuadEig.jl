@@ -128,7 +128,7 @@ end
 
 function Base.show(io::IO, l::Linearization{T,M}) where {T,M}
     print(io, summary(l), "\n",
-"  Matrix size    : $(size(l.A, 1)) × $(size(l.A, 2))
+"  Matrix size    : $(size(l.Q, 2)) × $(size(l.V, 1))
   Matrix type    : $M
   Scalings γ, δ  : $(real.(scalingfactors(l)))
   Deflated       : $(deflationstring(l))")
