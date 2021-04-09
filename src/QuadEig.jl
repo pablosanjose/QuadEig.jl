@@ -272,7 +272,7 @@ end
 function nonzero_rows(m::AbstractMatrix{T}, atol = default_tol(T)) where {T}
     n = 0
     for row in eachrow(m)
-        all(z -> abs(z) < atol, row) && break
+        all(z -> abs(z) <= atol, row) && break
         n += 1
     end
     return n
