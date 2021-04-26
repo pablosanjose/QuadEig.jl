@@ -272,12 +272,11 @@ function nonzero_rows(p::QuadPencilPQR{T}, atol = default_tol(T)) where {T}
 end
 
 function nonzero_rows(m::AbstractMatrix{T}, atol = default_tol(T)) where {T}
-    n = 0
-    for row in eachrow(m)
-        all(z -> abs(z) <= atol, row) && break
-        n += 1
+    row = 0
+    for outer row in reverse(1:size(m, 2))
+        maximum(abs, view(m, row, :)) > atol && break
     end
-    return n
+    return row
 end
 
 default_tol(::Type{T}) where {T} = sqrt(eps(real(T)))
