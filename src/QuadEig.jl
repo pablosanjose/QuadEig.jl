@@ -161,10 +161,14 @@ Base.iterate(l::Linearization, ::Val{:done}) = nothing
 ############################################################################################
 deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2; kw...); kw...)
 
-function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), kw...) where {T}
+function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), force_deflation_size = nothing, kw...) where {T}
     isdeflated(l) && return l
     n = size(l, 1) ÷ 2
-    r0, r2 = nonzero_rows(l, atol)
+    if force_deflation_size === nothing
+        r0, r2 = deflated_size(l, atol)
+    else
+        r0 = r2 = force_deflation_size
+    end
     r0 == n && r2 == n && return l
     s = n - r2
     X = view(l.A, 1+r2:n, 1:r2+s+r0) # [X21 X22 X23]
@@ -260,16 +264,10 @@ function push_rows!(rowval, nzval, rows, col)
     return nothing
 end
 
-function nonzero_rows(l::Linearization{T}, atol = default_tol(T)) where {T}
-    n = size(l, 2) ÷ 2
-    rank0, rank2 = nonzero_rows(view(l.A, n+1:2n, 1:n), atol), nonzero_rows(view(l.B, 1:n, 1:n), atol)
-    return rank0, rank2
-end
+deflated_size(l::Linearization, args...) = deflated_size(l.pencilpqr, args...)
 
-function nonzero_rows(p::QuadPencilPQR{T}, atol = default_tol(T)) where {T}
-    rank0, rank2 = nonzero_rows(p.qr0.R, atol), nonzero_rows(p.qr2.R, atol)
-    return rank0, rank2
-end
+deflated_size(p::QuadPencilPQR{T}, atol = default_tol(T)) where {T} =
+    nonzero_rows(p.RP0, atol), nonzero_rows(p.RP2, atol)
 
 function nonzero_rows(m::AbstractMatrix{T}, atol = default_tol(T)) where {T}
     row = 0
