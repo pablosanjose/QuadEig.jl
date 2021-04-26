@@ -96,6 +96,8 @@ end
 
 # Sparse QR from SparseSuite is also pivoted
 pqr(a::SparseMatrixCSC) = qr(a)
+pqr(a::Adjoint{T,<:SparseMatrixCSC}) where {T} = qr(copy(a))
+pqr(a::Transpose{T,<:SparseMatrixCSC}) where {T} = qr(copy(a))
 pqr(a) = qr!(copy(a), Val(true))
 
 ### Linearized Pencils #####################################################################
