@@ -161,13 +161,13 @@ Base.iterate(l::Linearization, ::Val{:done}) = nothing
 ############################################################################################
 deflate(A0, A1, A2; kw...) = deflate(linearize(A0, A1, A2; kw...); kw...)
 
-function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), force_deflation_size = nothing, kw...) where {T}
+function deflate(l::Linearization{T}; atol = sqrt(eps(real(T))), force_deflated_size = nothing, kw...) where {T}
     isdeflated(l) && return l
     n = size(l, 1) ÷ 2
-    if force_deflation_size === nothing
+    if force_deflated_size === nothing
         r0, r2 = deflated_size(l, atol)
     else
-        r0 = r2 = force_deflation_size
+        r0 = r2 = force_deflated_size
     end
     r0 == n && r2 == n && return l
     s = n - r2
