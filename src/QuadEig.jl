@@ -270,11 +270,13 @@ deflated_size(p::QuadPencilPQR{T}, atol = default_tol(T)) where {T} =
     nonzero_rows(p.RP0, atol), nonzero_rows(p.RP2, atol)
 
 function nonzero_rows(m::AbstractMatrix{T}, atol = default_tol(T)) where {T}
-    row = 0
-    for outer row in reverse(1:size(m, 1))
-        maximum(abs, view(m, row, :)) > atol && break
+    nrows = size(m, 1)
+    zerorows = 0
+    for j in 0:nrows-1
+        maximum(abs, view(m, nrows - j, :)) > atol && break
+        zerorows += 1
     end
-    return row
+    return nrows - zerorows
 end
 
 default_tol(::Type{T}) where {T} = sqrt(eps(real(T)))
